@@ -7,8 +7,8 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.0.0")]
-    [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.9.2")]
+    [Description("Perk machines: walk up, press E to buy perk bottles, drink them to activate perks.")]
     public class PerkMachines : RustPlugin
     {
         #region Plugin Reference
@@ -21,10 +21,10 @@ namespace Oxide.Plugins
 
         private class PerkConfig
         {
-            // Correct tea shortname (in case you still want to use items later)
-            public string TeaShortname = "maxhealthtea.pure";
+            // Item to give player (uses rock as base item for soda can icons from workshop)
+            public string PerkItemShortname = "rock";
 
-            // Machine skins per perk
+            // Machine skins per perk (vending machine appearance)
             public Dictionary<string, ulong> MachineSkins = new Dictionary<string, ulong>
             {
                 {"Juggernog", 3613126822},
@@ -33,14 +33,32 @@ namespace Oxide.Plugins
                 {"DoubleTap", 3613106495}
             };
 
-            // Item skin → perk; also used for machine skin reverse lookup
+            // Perk bottle item skins (tea with rock skin IDs for custom icons)
+            public Dictionary<string, ulong> PerkItemSkins = new Dictionary<string, ulong>
+            {
+                {"Juggernog", 3613226032},
+                {"SpeedCola", 3613226537},
+                {"QuickRevive", 3613227164},
+                {"DoubleTap", 3613224167}
+            };
+
+            // Item skin → perk mapping (for detecting when player uses perk item)
             public Dictionary<ulong, string> SkinToPerk = new Dictionary<ulong, string>
             {
+                // Perk bottle item skins
+                {3613226032, "Juggernog"},
+                {3613226537, "SpeedCola"},
+                {3613227164, "QuickRevive"},
+                {3613224167, "DoubleTap"},
+                // Machine skins (for vending machine detection)
                 {3613126822, "Juggernog"},
                 {3613111201, "SpeedCola"},
                 {3613119446, "QuickRevive"},
                 {3613106495, "DoubleTap"}
             };
+
+            // Sound effect to play when drinking a perk
+            public string DrinkSoundEffect = "assets/bundled/prefabs/fx/gestures/drink_tea.prefab";
 
             // Default price (can be overridden by economy plugin)
             public int DefaultPrice = 100;
@@ -49,6 +67,7 @@ namespace Oxide.Plugins
             // Perk effects
             public float JuggernogBonus = 50f;
             public float JuggernogMaxCap = 200f;
+            public float BasePlayerHealth = 100f; // Base player health before Juggernog
             public float DoubleTapMultiplier = 2f;
             public float QuickReviveRespawnHealth = 100f;
 
@@ -58,10 +77,10 @@ namespace Oxide.Plugins
 
             public Dictionary<string, string> PerkIconUrls = new Dictionary<string, string>
             {
-                {"Juggernog", "https://yourserver.com/icons/jugg.png"},
-                {"SpeedCola", "https://yourserver.com/icons/speed.png"},
-                {"QuickRevive", "https://yourserver.com/icons/revive.png"},
-                {"DoubleTap", "https://yourserver.com/icons/double.png"}
+                {"Juggernog", "https://i.imgur.com/Tz31zuK.jpeg"},
+                {"SpeedCola", "https://i.imgur.com/UUASvBu.jpeg"},
+                {"QuickRevive", "https://i.imgur.com/4Wh9rkD.jpeg"},
+                {"DoubleTap", "https://i.imgur.com/sI4IGu1.png"}
             };
         }
 
@@ -71,7 +90,8 @@ namespace Oxide.Plugins
         {
             public HashSet<string> Active = new HashSet<string>();
             public Dictionary<string, double> ExpireAt = new Dictionary<string, double>();
-            public float ExtraHealthGiven = 0f;
+            public float ExtraHealthGiven = 0f;  // Max extra health pool from Juggernog
+            public float CurrentExtraHealth = 0f; // Current extra health remaining (takes damage first)
         }
 
         private readonly Dictionary<ulong, PlayerPerkData> playerPerks = new Dictionary<ulong, PlayerPerkData>();
@@ -110,15 +130,105 @@ namespace Oxide.Plugins
         {
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
-            Puts("PerkMachines v2.0.0 loaded");
+            timer.Every(1f, UpdateHealthUI); // Update health bar periodically
+            timer.Every(1f, UpdatePerkUI); // Update perk countdown timers every second
+            Puts("PerkMachines v2.7.0 loaded");
         }
 
         private void Unload()
         {
             foreach (var player in BasePlayer.activePlayerList)
+            {
                 CuiHelper.DestroyUi(player, "perk_ui_container");
+                CuiHelper.DestroyUi(player, "perk_health_ui");
+            }
 
             playerPerks.Clear();
+        }
+
+        private void UpdateHealthUI()
+        {
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                var d = GetPerkData(player.userID);
+                if (d.Active.Contains("Juggernog") && d.ExtraHealthGiven > 0)
+                {
+                    RefreshHealthUI(player);
+                }
+            }
+        }
+
+        private void UpdatePerkUI()
+        {
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                var d = GetPerkData(player.userID);
+                if (d.Active.Count > 0)
+                {
+                    RefreshUI(player);
+                }
+            }
+        }
+
+        private void RefreshHealthUI(BasePlayer player)
+        {
+            if (player == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            CuiHelper.DestroyUi(player, "perk_health_ui");
+
+            if (!d.Active.Contains("Juggernog") || d.ExtraHealthGiven <= 0)
+                return;
+
+            var container = new CuiElementContainer();
+
+            // Background panel for extended health bar - positioned bottom right, above normal health UI
+            var healthBgPanel = new CuiPanel
+            {
+                Image = { Color = "0.1 0.1 0.1 0.8" },
+                RectTransform = { AnchorMin = "0.67 0.027", AnchorMax = "0.83 0.055" },
+                CursorEnabled = false
+            };
+            container.Add(healthBgPanel, "Hud", "perk_health_ui");
+
+            // Use the current extra health pool directly
+            float maxExtra = d.ExtraHealthGiven;
+            float currentExtra = d.CurrentExtraHealth;
+            float fillPercent = Mathf.Clamp01(currentExtra / maxExtra);
+
+            // Extended health bar fill (red color to match Rust's health bar)
+            var healthFill = new CuiPanel
+            {
+                Image = { Color = "0.8 0.2 0.2 1" },
+                RectTransform = 
+                { 
+                    AnchorMin = "0.02 0.15", 
+                    AnchorMax = $"{0.02f + 0.96f * fillPercent} 0.85" 
+                },
+                CursorEnabled = false
+            };
+            container.Add(healthFill, "perk_health_ui", "perk_health_fill");
+
+            // Label showing extra health
+            var healthLabel = new CuiLabel
+            {
+                RectTransform =
+                {
+                    AnchorMin = "0 0",
+                    AnchorMax = "1 1"
+                },
+                Text =
+                {
+                    Text = $"+{Mathf.RoundToInt(currentExtra)}",
+                    FontSize = 10,
+                    Color = "1 1 1 1",
+                    Align = TextAnchor.MiddleCenter
+                }
+            };
+            container.Add(healthLabel, "perk_health_ui");
+
+            CuiHelper.AddUi(player, container);
         }
 
         private void LoadImages()
@@ -129,21 +239,29 @@ namespace Oxide.Plugins
                 return;
             }
 
-            var urls = new List<string>();
+            // Register each image URL with ImageLibrary using a unique name
             foreach (var kv in cfg.PerkIconUrls)
-                urls.Add(kv.Value);
+            {
+                string perkName = kv.Key;
+                string url = kv.Value;
+                
+                if (string.IsNullOrEmpty(url))
+                    continue;
 
-            try
-            {
-                ImageLibrary.Call("AddImageList", IL_CATEGORY, urls, (ulong)0);
-                ilReady = true;
-                Puts($"[PerkMachines] Registered {urls.Count} icon URLs with ImageLibrary.");
+                try
+                {
+                    // Use AddImage with name and URL - ImageLibrary will download and cache it
+                    ImageLibrary.Call("AddImage", url, perkName, (ulong)0);
+                    DebugMsg($"Registered image for {perkName}: {url}");
+                }
+                catch (Exception ex)
+                {
+                    PrintWarning($"ImageLibrary.AddImage failed for {perkName}: {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                PrintWarning($"ImageLibrary.AddImageList failed: {ex.Message}");
-                ilReady = false;
-            }
+            
+            ilReady = true;
+            Puts($"[PerkMachines] Registered {cfg.PerkIconUrls.Count} icon URLs with ImageLibrary.");
         }
 
         #endregion
@@ -282,33 +400,34 @@ namespace Oxide.Plugins
                     if (apply)
                     {
                         float give = cfg.JuggernogBonus;
-                        float currentMax = player.health + d.ExtraHealthGiven;
+                        float currentMax = cfg.BasePlayerHealth + d.ExtraHealthGiven;
 
                         if (currentMax + give > cfg.JuggernogMaxCap)
                             give = Math.Max(0f, cfg.JuggernogMaxCap - currentMax);
 
                         d.ExtraHealthGiven += give;
-                        player.health = Mathf.Min(player.health + give, cfg.JuggernogMaxCap);
-                        player.ChatMessage($"Juggernog active (+{give} HP)");
+                        d.CurrentExtraHealth = d.ExtraHealthGiven; // Start with full extra health
+                        player.SendNetworkUpdate(); // Sync to client
+                        player.ChatMessage($"Juggernog activated (+{give} HP shield)");
                     }
                     else
                     {
-                        player.health = Mathf.Max(1f, player.health - d.ExtraHealthGiven);
                         d.ExtraHealthGiven = 0f;
+                        d.CurrentExtraHealth = 0f;
                         player.ChatMessage("Juggernog expired");
                     }
                     break;
 
                 case "SpeedCola":
                     if (apply)
-                        player.ChatMessage("Speed Cola active: faster reload (visual only)");
+                        player.ChatMessage("Speed Cola activated");
                     else
                         player.ChatMessage("Speed Cola expired");
                     break;
 
                 case "DoubleTap":
                     if (apply)
-                        player.ChatMessage("Double Tap active: increased damage");
+                        player.ChatMessage("Double Tap activated");
                     else
                         player.ChatMessage("Double Tap expired");
                     break;
@@ -316,12 +435,11 @@ namespace Oxide.Plugins
                 case "QuickRevive":
                     if (apply)
                     {
-                        TryInstantRevive(player);
-                        player.ChatMessage("Quick Revive applied");
+                        player.ChatMessage("Quick Revive activated (auto-revive in 2 sec if downed)");
                     }
                     else
                     {
-                        player.ChatMessage("Quick Revive expired");
+                        player.ChatMessage("Quick Revive expired/used");
                     }
                     break;
             }
@@ -334,19 +452,99 @@ namespace Oxide.Plugins
                 if (player == null)
                     return;
 
-                if (player.health <= 0f || player.IsWounded())
+                if (player.IsWounded())
                 {
+                    // Stop the wounded state properly
+                    player.StopWounded();
                     player.health = cfg.QuickReviveRespawnHealth;
                     if (player.metabolism != null)
                         player.metabolism.bleeding.value = 0f;
-
-                    player.StopSpectating();
                     player.SendNetworkUpdate();
+                    DebugMsg($"Instant revived {player.displayName}");
                 }
             }
             catch (Exception ex)
             {
                 DebugMsg("TryInstantRevive error: " + ex.Message);
+            }
+        }
+
+        // Hook for when player becomes wounded - auto-revive if they have QuickRevive
+        // QuickRevive SELF-REVIVE: when the player with this perk goes down,
+        // they automatically stand back up after a 2 second delay
+        private void OnPlayerWound(BasePlayer player)
+        {
+            if (player == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (d.Active.Contains("QuickRevive"))
+            {
+                player.ChatMessage("Quick Revive activating... Stand up in 2 seconds!");
+                
+                // Use a 2 second timer for self-revive
+                timer.Once(2f, () =>
+                {
+                    if (player != null && player.IsConnected && player.IsWounded())
+                    {
+                        TryInstantRevive(player);
+                        player.ChatMessage("Quick Revive: You stood back up!");
+                        // QuickRevive is consumed after use
+                        RevokePerk(player, "QuickRevive");
+                    }
+                });
+            }
+        }
+
+        // Hook for healing - regenerate extra health pool ONLY after normal health is at max
+        private void OnHealingItemUse(HeldEntity item, BasePlayer player)
+        {
+            if (player == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (d.Active.Contains("Juggernog") && d.CurrentExtraHealth < d.ExtraHealthGiven)
+            {
+                // Only heal extra health if normal health is already at max
+                timer.Once(0.5f, () =>
+                {
+                    if (player != null && player.IsConnected && d.Active.Contains("Juggernog"))
+                    {
+                        // Only heal extra health if normal health is at or above base
+                        if (player.health >= cfg.BasePlayerHealth)
+                        {
+                            float healAmount = 15f; // Heal 15 extra HP per healing item
+                            d.CurrentExtraHealth = Mathf.Min(d.CurrentExtraHealth + healAmount, d.ExtraHealthGiven);
+                            RefreshHealthUI(player);
+                            DebugMsg($"Healed extra HP for {player.displayName}: {d.CurrentExtraHealth}/{d.ExtraHealthGiven}");
+                        }
+                    }
+                });
+            }
+        }
+
+        // Also heal when player's health naturally regenerates or is healed by any source
+        private void OnPlayerHealthChange(BasePlayer player, float oldValue, float newValue)
+        {
+            if (player == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (!d.Active.Contains("Juggernog"))
+                return;
+
+            // Only heal extra health if normal health reaches max and there's overflow
+            if (newValue > oldValue && newValue > cfg.BasePlayerHealth && d.CurrentExtraHealth < d.ExtraHealthGiven)
+            {
+                float overflow = newValue - cfg.BasePlayerHealth;
+                if (overflow > 0)
+                {
+                    // Cap player at base health, put overflow into extra health
+                    player.health = cfg.BasePlayerHealth;
+                    d.CurrentExtraHealth = Mathf.Min(d.CurrentExtraHealth + overflow, d.ExtraHealthGiven);
+                    player.SendNetworkUpdate();
+                    RefreshHealthUI(player);
+                }
             }
         }
 
@@ -356,6 +554,48 @@ namespace Oxide.Plugins
 
         private object OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
         {
+            // Protect perk vending machines from all damage
+            var vm = entity as VendingMachine;
+            if (vm != null && cfg.SkinToPerk.ContainsKey(vm.skinID))
+            {
+                DebugMsg($"Blocked damage to perk machine: {vm.shopName}");
+                return true; // Block all damage to perk machines
+            }
+
+            // Handle Juggernog extra health - absorb damage before real health
+            var targetPlayer = entity as BasePlayer;
+            if (targetPlayer != null && info != null)
+            {
+                var targetData = GetPerkData(targetPlayer.userID);
+                if (targetData.Active.Contains("Juggernog") && targetData.CurrentExtraHealth > 0)
+                {
+                    float totalDamage = info.damageTypes.Total();
+                    
+                    if (totalDamage > 0)
+                    {
+                        // Extra health absorbs damage first
+                        if (targetData.CurrentExtraHealth >= totalDamage)
+                        {
+                            // Extra health absorbs all damage
+                            targetData.CurrentExtraHealth -= totalDamage;
+                            DebugMsg($"Juggernog absorbed {totalDamage} damage. Remaining extra HP: {targetData.CurrentExtraHealth}");
+                            RefreshHealthUI(targetPlayer);
+                            return true; // Block damage to real health
+                        }
+                        else
+                        {
+                            // Extra health absorbs partial damage, rest goes to real health
+                            float remaining = totalDamage - targetData.CurrentExtraHealth;
+                            DebugMsg($"Juggernog absorbed {targetData.CurrentExtraHealth} damage, {remaining} passes through");
+                            targetData.CurrentExtraHealth = 0f;
+                            info.damageTypes.ScaleAll(remaining / totalDamage);
+                            RefreshHealthUI(targetPlayer);
+                        }
+                    }
+                }
+            }
+
+            // Handle DoubleTap damage multiplier for attacker
             if (info?.InitiatorPlayer == null)
                 return null;
 
@@ -363,9 +603,111 @@ namespace Oxide.Plugins
             var d = GetPerkData(inst.userID);
 
             if (d.Active.Contains("DoubleTap"))
+            {
                 info.damageTypes.ScaleAll(cfg.DoubleTapMultiplier);
+                DebugMsg($"DoubleTap: Scaled damage by {cfg.DoubleTapMultiplier}x for {inst.displayName}");
+            }
 
             return null;
+        }
+
+        // SpeedCola: Instant reload - using multiple hooks to ensure it works
+        private void OnReloadWeapon(BasePlayer player, BaseProjectile weapon)
+        {
+            if (player == null || weapon == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (!d.Active.Contains("SpeedCola"))
+                return;
+            
+            DebugMsg($"SpeedCola: OnReloadWeapon triggered for {player.displayName}");
+            DoInstantReload(player, weapon);
+        }
+
+        // Also hook into weapon reload message
+        private object OnWeaponReload(BaseProjectile weapon, BasePlayer player)
+        {
+            if (player == null || weapon == null)
+                return null;
+
+            var d = GetPerkData(player.userID);
+            if (!d.Active.Contains("SpeedCola"))
+                return null;
+
+            DebugMsg($"SpeedCola: OnWeaponReload triggered for {player.displayName}");
+            DoInstantReload(player, weapon);
+            return null;
+        }
+
+        // Also hook into magazine reload
+        private void OnMagazineReload(BasePlayer player, BaseProjectile weapon)
+        {
+            if (player == null || weapon == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (!d.Active.Contains("SpeedCola"))
+                return;
+
+            DebugMsg($"SpeedCola: OnMagazineReload triggered for {player.displayName}");
+            DoInstantReload(player, weapon);
+        }
+
+        private void DoInstantReload(BasePlayer player, BaseProjectile weapon)
+        {
+            // Short delay then instant reload
+            timer.Once(0.2f, () =>
+            {
+                if (player == null || !player.IsConnected)
+                    return;
+
+                try
+                {
+                    // Use the weapon passed in or find the held weapon
+                    BaseProjectile targetWeapon = weapon;
+                    if (targetWeapon == null || targetWeapon.IsDestroyed)
+                    {
+                        var heldItem = player.GetActiveItem();
+                        targetWeapon = heldItem?.GetHeldEntity() as BaseProjectile;
+                    }
+                    
+                    if (targetWeapon == null || targetWeapon.IsDestroyed)
+                        return;
+
+                    var magazine = targetWeapon.primaryMagazine;
+                    if (magazine == null || magazine.ammoType == null)
+                        return;
+
+                    // Calculate ammo needed
+                    int needed = magazine.capacity - magazine.contents;
+                    if (needed <= 0)
+                        return;
+
+                    // Find ammo in player inventory
+                    int found = player.inventory.GetAmount(magazine.ammoType.itemid);
+                    int toLoad = Math.Min(needed, found);
+
+                    if (toLoad > 0)
+                    {
+                        // Take ammo from inventory
+                        player.inventory.Take(null, magazine.ammoType.itemid, toLoad);
+                        
+                        // Fill magazine instantly
+                        magazine.contents += toLoad;
+                        
+                        // Force update to client
+                        targetWeapon.SendNetworkUpdateImmediate();
+                        player.SendNetworkUpdateImmediate();
+                        
+                        DebugMsg($"SpeedCola: Instant reload {toLoad} ammo for {player.displayName}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    DebugMsg($"SpeedCola reload error: {ex.Message}");
+                }
+            });
         }
 
         #endregion
@@ -535,9 +877,82 @@ namespace Oxide.Plugins
                 return;
             }
 
-            // If charge succeeded, grant perk
-            GrantPerk(player, perkName);
+            // If charge succeeded, give perk item to player
+            GivePerkItem(player, perkName);
             Interface.CallHook("OnPerkPurchased", player, perkName, vm);
+        }
+
+        private void GivePerkItem(BasePlayer player, string perkName)
+        {
+            if (player == null || string.IsNullOrEmpty(perkName))
+                return;
+
+            // Get the perk item skin ID (separate from machine skins)
+            if (!cfg.PerkItemSkins.TryGetValue(perkName, out ulong skinId))
+            {
+                player.ChatMessage($"Error: No item skin configured for {perkName}");
+                return;
+            }
+
+            // Create the perk item (using rock as base)
+            var itemDef = ItemManager.FindItemDefinition(cfg.PerkItemShortname);
+            if (itemDef == null)
+            {
+                PrintError($"Could not find item definition for '{cfg.PerkItemShortname}'");
+                player.ChatMessage("Error: Perk item not found");
+                return;
+            }
+
+            var item = ItemManager.Create(itemDef, 1, skinId);
+            if (item == null)
+            {
+                player.ChatMessage("Error: Could not create perk item");
+                return;
+            }
+
+            // Set custom name for the item
+            item.name = $"{perkName} Perk";
+
+            // Give item to player
+            if (!player.inventory.GiveItem(item))
+            {
+                // If inventory is full, drop at player's feet
+                item.Drop(player.transform.position, Vector3.up);
+                player.ChatMessage($"Inventory full! {perkName} Perk dropped at your feet.");
+            }
+            else
+            {
+                player.ChatMessage($"You received {perkName} Perk! Use it to activate.");
+            }
+
+            DebugMsg($"Gave {perkName} perk item (skin {skinId}) to {player.displayName}");
+        }
+
+        // Hook when player uses an item - check if it's a perk item
+        private object OnItemAction(Item item, string action, BasePlayer player)
+        {
+            if (item == null || player == null)
+                return null;
+
+            // Check if this item's skin matches a perk item skin
+            if (!cfg.PerkItemSkins.ContainsValue(item.skin))
+                return null;
+
+            // Get the perk name from the skin
+            if (!cfg.SkinToPerk.TryGetValue(item.skin, out string perkName))
+                return null;
+
+            // This is a perk item! Play drink sound effect
+            Effect.server.Run(cfg.DrinkSoundEffect, player.transform.position);
+
+            // Grant the perk
+            GrantPerk(player, perkName);
+            
+            // Remove the item (it's been consumed)
+            item.Remove();
+
+            // Block the default item action
+            return true;
         }
 
         #endregion
@@ -552,26 +967,32 @@ namespace Oxide.Plugins
             CuiHelper.DestroyUi(player, "perk_ui_container");
 
             var d = GetPerkData(player.userID);
+
+            // Update the health UI
+            RefreshHealthUI(player);
+
+            // Separate perk icons UI (top left)
             if (d.Active.Count == 0)
                 return;
 
-            var container = new CuiElementContainer();
+            var perkContainer = new CuiElementContainer();
 
             var mainPanel = new CuiPanel
             {
                 Image = { Color = "0 0 0 0" },
-                RectTransform = { AnchorMin = "0.015 0.85", AnchorMax = "0.25 0.97" },
+                RectTransform = { AnchorMin = "0.01 0.80", AnchorMax = "0.30 0.98" },
                 CursorEnabled = false
             };
 
-            container.Add(mainPanel, "Hud", "perk_ui_container");
+            perkContainer.Add(mainPanel, "Hud", "perk_ui_container");
 
-            float y = 0.8f;
+            float y = 0.75f;
             foreach (var perk in d.Active)
             {
-                cfg.PerkIconUrls.TryGetValue(perk, out var url);
-                string rawImage = GetImageCached(url) ?? string.Empty;
+                // Get the cached image using the perk name as identifier
+                string rawImage = GetImageCached(perk) ?? string.Empty;
 
+                // Larger, more square icon (0.25 width x 0.22 height for near-square aspect)
                 var iconElement = new CuiElement
                 {
                     Parent = "perk_ui_container",
@@ -581,11 +1002,11 @@ namespace Oxide.Plugins
                         new CuiRectTransformComponent
                         {
                             AnchorMin = $"0 {y}",
-                            AnchorMax = $"0.15 {y + 0.15f}"
+                            AnchorMax = $"0.22 {y + 0.22f}"
                         }
                     }
                 };
-                container.Add(iconElement);
+                perkContainer.Add(iconElement);
 
                 double rem = d.ExpireAt.ContainsKey(perk)
                     ? d.ExpireAt[perk] - Time.realtimeSinceStartup
@@ -597,8 +1018,8 @@ namespace Oxide.Plugins
                 {
                     RectTransform =
                     {
-                        AnchorMin = $"0.16 {y}",
-                        AnchorMax = $"1 {y + 0.15f}"
+                        AnchorMin = $"0.24 {y}",
+                        AnchorMax = $"1 {y + 0.22f}"
                     },
                     Text =
                     {
@@ -609,22 +1030,23 @@ namespace Oxide.Plugins
                     }
                 };
 
-                container.Add(label, "perk_ui_container");
+                perkContainer.Add(label, "perk_ui_container");
 
-                y -= 0.18f;
+                y -= 0.25f;
             }
 
-            CuiHelper.AddUi(player, container);
+            CuiHelper.AddUi(player, perkContainer);
         }
 
-        private string GetImageCached(string url)
+        private string GetImageCached(string perkName)
         {
-            if (ImageLibrary == null || !ilReady || string.IsNullOrEmpty(url))
+            if (ImageLibrary == null || !ilReady || string.IsNullOrEmpty(perkName))
                 return null;
 
             try
             {
-                return ImageLibrary.Call<string>("GetImage", IL_CATEGORY, url);
+                // GetImage takes the image name (perkName) that we registered with AddImage
+                return ImageLibrary.Call<string>("GetImage", perkName);
             }
             catch
             {
