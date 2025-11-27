@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.6.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.7.0")]
     [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
     public class PerkMachines : RustPlugin
     {
@@ -59,10 +59,10 @@ namespace Oxide.Plugins
 
             public Dictionary<string, string> PerkIconUrls = new Dictionary<string, string>
             {
-                {"Juggernog", "https://yourserver.com/icons/jugg.png"},
-                {"SpeedCola", "https://yourserver.com/icons/speed.png"},
-                {"QuickRevive", "https://yourserver.com/icons/revive.png"},
-                {"DoubleTap", "https://yourserver.com/icons/double.png"}
+                {"Juggernog", "https://i.imgur.com/Tz31zuK.jpeg"},
+                {"SpeedCola", "https://i.imgur.com/UUASvBu.jpeg"},
+                {"QuickRevive", "https://i.imgur.com/4Wh9rkD.jpeg"},
+                {"DoubleTap", "https://i.imgur.com/sI4IGu1.png"}
             };
         }
 
@@ -113,7 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
-            Puts("PerkMachines v2.6.0 loaded");
+            Puts("PerkMachines v2.7.0 loaded");
         }
 
         private void Unload()
@@ -208,21 +208,29 @@ namespace Oxide.Plugins
                 return;
             }
 
-            var urls = new List<string>();
+            // Register each image URL with ImageLibrary using a unique name
             foreach (var kv in cfg.PerkIconUrls)
-                urls.Add(kv.Value);
+            {
+                string perkName = kv.Key;
+                string url = kv.Value;
+                
+                if (string.IsNullOrEmpty(url))
+                    continue;
 
-            try
-            {
-                ImageLibrary.Call("AddImageList", IL_CATEGORY, urls, (ulong)0);
-                ilReady = true;
-                Puts($"[PerkMachines] Registered {urls.Count} icon URLs with ImageLibrary.");
+                try
+                {
+                    // Use AddImage with name and URL - ImageLibrary will download and cache it
+                    ImageLibrary.Call("AddImage", url, perkName, (ulong)0);
+                    DebugMsg($"Registered image for {perkName}: {url}");
+                }
+                catch (Exception ex)
+                {
+                    PrintWarning($"ImageLibrary.AddImage failed for {perkName}: {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                PrintWarning($"ImageLibrary.AddImageList failed: {ex.Message}");
-                ilReady = false;
-            }
+            
+            ilReady = true;
+            Puts($"[PerkMachines] Registered {cfg.PerkIconUrls.Count} icon URLs with ImageLibrary.");
         }
 
         #endregion
@@ -877,8 +885,8 @@ namespace Oxide.Plugins
             float y = 0.75f;
             foreach (var perk in d.Active)
             {
-                cfg.PerkIconUrls.TryGetValue(perk, out var url);
-                string rawImage = GetImageCached(url) ?? string.Empty;
+                // Get the cached image using the perk name as identifier
+                string rawImage = GetImageCached(perk) ?? string.Empty;
 
                 // Larger, more square icon (0.25 width x 0.22 height for near-square aspect)
                 var iconElement = new CuiElement
@@ -926,14 +934,15 @@ namespace Oxide.Plugins
             CuiHelper.AddUi(player, perkContainer);
         }
 
-        private string GetImageCached(string url)
+        private string GetImageCached(string perkName)
         {
-            if (ImageLibrary == null || !ilReady || string.IsNullOrEmpty(url))
+            if (ImageLibrary == null || !ilReady || string.IsNullOrEmpty(perkName))
                 return null;
 
             try
             {
-                return ImageLibrary.Call<string>("GetImage", IL_CATEGORY, url);
+                // GetImage takes the image name (perkName) that we registered with AddImage
+                return ImageLibrary.Call<string>("GetImage", perkName);
             }
             catch
             {
