@@ -161,9 +161,16 @@ namespace Oxide.Plugins
             container.Add(healthBgPanel, "Hud", "perk_health_ui");
 
             // Calculate fill based on extra health remaining
+            // Show the actual bonus health given, not calculated from current health
             float maxExtra = cfg.JuggernogBonus;
-            float currentExtra = Math.Max(0f, player.health - cfg.BasePlayerHealth);
-            if (currentExtra > d.ExtraHealthGiven) currentExtra = d.ExtraHealthGiven;
+            float currentExtra = d.ExtraHealthGiven;
+            
+            // If player has taken damage, calculate remaining bonus health
+            if (player.health < cfg.BasePlayerHealth + d.ExtraHealthGiven)
+            {
+                currentExtra = Math.Max(0f, player.health - cfg.BasePlayerHealth);
+            }
+            
             float fillPercent = Mathf.Clamp01(currentExtra / maxExtra);
 
             // Extended health bar fill (red color to match Rust's health bar)
@@ -368,6 +375,7 @@ namespace Oxide.Plugins
 
                         d.ExtraHealthGiven += give;
                         player.health = Mathf.Min(player.health + give, cfg.JuggernogMaxCap);
+                        player.SendNetworkUpdate(); // Sync health to client
                         player.ChatMessage($"Juggernog active (+{give} HP)");
                     }
                     else
