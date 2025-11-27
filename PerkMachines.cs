@@ -636,9 +636,6 @@ namespace Oxide.Plugins
             var d = GetPerkData(player.userID);
             if (!d.Active.Contains("SpeedCola"))
                 return;
-
-            // Store weapon reference for the timer
-            var weaponId = weapon.net?.ID ?? 0;
             
             // Short delay then instant reload
             timer.Once(0.3f, () =>
