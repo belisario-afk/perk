@@ -901,7 +901,7 @@ namespace Oxide.Plugins
                 // Get the cached image using the perk name as identifier
                 string rawImage = GetImageCached(perk) ?? string.Empty;
 
-                // Icon size as specified by user (0.07 width x 0.4 height)
+                // Larger, more square icon (0.25 width x 0.22 height for near-square aspect)
                 var iconElement = new CuiElement
                 {
                     Parent = "perk_ui_container",
@@ -911,7 +911,7 @@ namespace Oxide.Plugins
                         new CuiRectTransformComponent
                         {
                             AnchorMin = $"0 {y}",
-                            AnchorMax = $"0.5 {y + 0.35f}"
+                            AnchorMax = $"0.07 {y + 0.4f}"
                         }
                     }
                 };
@@ -930,7 +930,7 @@ namespace Oxide.Plugins
                         RectTransform =
                         {
                             AnchorMin = $"0 {y - 0.08f}",
-                            AnchorMax = $"0.5 {y}"
+                            AnchorMax = $"0.07 {y}"
                         },
                         Text =
                         {
@@ -943,7 +943,7 @@ namespace Oxide.Plugins
                     perkContainer.Add(timerLabel, "perk_ui_container");
                 }
 
-                y -= 0.42f;
+                y -= 0.48f;
             }
 
             CuiHelper.AddUi(player, perkContainer);
