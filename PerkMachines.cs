@@ -7,8 +7,8 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.7.0")]
-    [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.8.0")]
+    [Description("Perk machines: walk up, press E to buy perk bottles, drink them to activate perks.")]
     public class PerkMachines : RustPlugin
     {
         #region Plugin Reference
@@ -21,8 +21,8 @@ namespace Oxide.Plugins
 
         private class PerkConfig
         {
-            // Correct tea shortname (in case you still want to use items later)
-            public string TeaShortname = "maxhealthtea.pure";
+            // Item to give player (uses tea as base item)
+            public string PerkItemShortname = "maxhealthtea.pure";
 
             // Machine skins per perk
             public Dictionary<string, ulong> MachineSkins = new Dictionary<string, ulong>
@@ -33,7 +33,7 @@ namespace Oxide.Plugins
                 {"DoubleTap", 3613106495}
             };
 
-            // Item skin → perk; also used for machine skin reverse lookup
+            // Item/Machine skin → perk mapping
             public Dictionary<ulong, string> SkinToPerk = new Dictionary<ulong, string>
             {
                 {3613126822, "Juggernog"},
@@ -859,9 +859,79 @@ namespace Oxide.Plugins
                 return;
             }
 
-            // If charge succeeded, grant perk
-            GrantPerk(player, perkName);
+            // If charge succeeded, give perk item to player
+            GivePerkItem(player, perkName);
             Interface.CallHook("OnPerkPurchased", player, perkName, vm);
+        }
+
+        private void GivePerkItem(BasePlayer player, string perkName)
+        {
+            if (player == null || string.IsNullOrEmpty(perkName))
+                return;
+
+            // Get the skin ID for this perk
+            if (!cfg.MachineSkins.TryGetValue(perkName, out ulong skinId))
+            {
+                player.ChatMessage($"Error: No skin configured for {perkName}");
+                return;
+            }
+
+            // Create the perk item (using tea as base)
+            var itemDef = ItemManager.FindItemDefinition(cfg.PerkItemShortname);
+            if (itemDef == null)
+            {
+                PrintError($"Could not find item definition for '{cfg.PerkItemShortname}'");
+                player.ChatMessage("Error: Perk item not found");
+                return;
+            }
+
+            var item = ItemManager.Create(itemDef, 1, skinId);
+            if (item == null)
+            {
+                player.ChatMessage("Error: Could not create perk item");
+                return;
+            }
+
+            // Set custom name for the item
+            item.name = $"{perkName} Perk";
+
+            // Give item to player
+            if (!player.inventory.GiveItem(item))
+            {
+                // If inventory is full, drop at player's feet
+                item.Drop(player.transform.position, Vector3.up);
+                player.ChatMessage($"Inventory full! {perkName} Perk dropped at your feet.");
+            }
+            else
+            {
+                player.ChatMessage($"You received {perkName} Perk! Drink it to activate.");
+            }
+
+            DebugMsg($"Gave {perkName} perk item (skin {skinId}) to {player.displayName}");
+        }
+
+        // Hook when player uses/drinks an item - check if it's a perk item
+        private object OnItemAction(Item item, string action, BasePlayer player)
+        {
+            if (item == null || player == null)
+                return null;
+
+            // Only handle "drink" action for tea items
+            if (action != "drink" && action != "consume")
+                return null;
+
+            // Check if this item's skin matches a perk
+            if (!cfg.SkinToPerk.TryGetValue(item.skin, out string perkName))
+                return null;
+
+            // This is a perk item! Grant the perk and consume the item
+            GrantPerk(player, perkName);
+            
+            // Remove the item (it's been consumed)
+            item.Remove();
+
+            // Block the default tea effect
+            return true;
         }
 
         #endregion
