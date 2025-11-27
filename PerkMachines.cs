@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.8.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.9.0")]
     [Description("Perk machines: walk up, press E to buy perk bottles, drink them to activate perks.")]
     public class PerkMachines : RustPlugin
     {
@@ -21,10 +21,10 @@ namespace Oxide.Plugins
 
         private class PerkConfig
         {
-            // Item to give player (uses tea as base item)
-            public string PerkItemShortname = "maxhealthtea.pure";
+            // Item to give player (uses rock as base item for perk bottles)
+            public string PerkItemShortname = "rock";
 
-            // Machine skins per perk
+            // Machine skins per perk (vending machine appearance)
             public Dictionary<string, ulong> MachineSkins = new Dictionary<string, ulong>
             {
                 {"Juggernog", 3613126822},
@@ -33,14 +33,32 @@ namespace Oxide.Plugins
                 {"DoubleTap", 3613106495}
             };
 
-            // Item/Machine skin → perk mapping
+            // Perk bottle item skins (rock with custom icons)
+            public Dictionary<string, ulong> PerkItemSkins = new Dictionary<string, ulong>
+            {
+                {"Juggernog", 3613226032},
+                {"SpeedCola", 3613226537},
+                {"QuickRevive", 3613227164},
+                {"DoubleTap", 3613224167}
+            };
+
+            // Item skin → perk mapping (for detecting when player uses perk item)
             public Dictionary<ulong, string> SkinToPerk = new Dictionary<ulong, string>
             {
+                // Perk bottle item skins
+                {3613226032, "Juggernog"},
+                {3613226537, "SpeedCola"},
+                {3613227164, "QuickRevive"},
+                {3613224167, "DoubleTap"},
+                // Machine skins (for vending machine detection)
                 {3613126822, "Juggernog"},
                 {3613111201, "SpeedCola"},
                 {3613119446, "QuickRevive"},
                 {3613106495, "DoubleTap"}
             };
+
+            // Sound effect to play when drinking a perk
+            public string DrinkSoundEffect = "assets/bundled/prefabs/fx/gestures/drink_tea.prefab";
 
             // Default price (can be overridden by economy plugin)
             public int DefaultPrice = 100;
@@ -869,14 +887,14 @@ namespace Oxide.Plugins
             if (player == null || string.IsNullOrEmpty(perkName))
                 return;
 
-            // Get the skin ID for this perk
-            if (!cfg.MachineSkins.TryGetValue(perkName, out ulong skinId))
+            // Get the perk item skin ID (separate from machine skins)
+            if (!cfg.PerkItemSkins.TryGetValue(perkName, out ulong skinId))
             {
-                player.ChatMessage($"Error: No skin configured for {perkName}");
+                player.ChatMessage($"Error: No item skin configured for {perkName}");
                 return;
             }
 
-            // Create the perk item (using tea as base)
+            // Create the perk item (using rock as base)
             var itemDef = ItemManager.FindItemDefinition(cfg.PerkItemShortname);
             if (itemDef == null)
             {
@@ -904,33 +922,36 @@ namespace Oxide.Plugins
             }
             else
             {
-                player.ChatMessage($"You received {perkName} Perk! Drink it to activate.");
+                player.ChatMessage($"You received {perkName} Perk! Use it to activate.");
             }
 
             DebugMsg($"Gave {perkName} perk item (skin {skinId}) to {player.displayName}");
         }
 
-        // Hook when player uses/drinks an item - check if it's a perk item
+        // Hook when player uses an item - check if it's a perk item
         private object OnItemAction(Item item, string action, BasePlayer player)
         {
             if (item == null || player == null)
                 return null;
 
-            // Only handle "drink" action for tea items
-            if (action != "drink" && action != "consume")
+            // Check if this item's skin matches a perk item skin
+            if (!cfg.PerkItemSkins.ContainsValue(item.skin))
                 return null;
 
-            // Check if this item's skin matches a perk
+            // Get the perk name from the skin
             if (!cfg.SkinToPerk.TryGetValue(item.skin, out string perkName))
                 return null;
 
-            // This is a perk item! Grant the perk and consume the item
+            // This is a perk item! Play drink sound effect
+            Effect.server.Run(cfg.DrinkSoundEffect, player.transform.position);
+
+            // Grant the perk
             GrantPerk(player, perkName);
             
             // Remove the item (it's been consumed)
             item.Remove();
 
-            // Block the default tea effect
+            // Block the default item action
             return true;
         }
 
