@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.3.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.4.0")]
     [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
     public class PerkMachines : RustPlugin
     {
@@ -113,7 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
-            Puts("PerkMachines v2.3.0 loaded");
+            Puts("PerkMachines v2.4.0 loaded");
         }
 
         private void Unload()
@@ -396,12 +396,11 @@ namespace Oxide.Plugins
                 case "QuickRevive":
                     if (apply)
                     {
-                        TryInstantRevive(player);
-                        player.ChatMessage("Quick Revive applied");
+                        player.ChatMessage("Quick Revive active: You will auto-revive in 2 seconds if downed!");
                     }
                     else
                     {
-                        player.ChatMessage("Quick Revive expired");
+                        player.ChatMessage("Quick Revive expired/used");
                     }
                     break;
             }
@@ -432,6 +431,8 @@ namespace Oxide.Plugins
         }
 
         // Hook for when player becomes wounded - auto-revive if they have QuickRevive
+        // QuickRevive now works as SELF-REVIVE: when the player with this perk goes down,
+        // they automatically stand back up after a 2 second delay
         private void OnPlayerWound(BasePlayer player)
         {
             if (player == null)
@@ -440,100 +441,17 @@ namespace Oxide.Plugins
             var d = GetPerkData(player.userID);
             if (d.Active.Contains("QuickRevive"))
             {
-                // Use a short timer to let the wound state fully apply first
-                timer.Once(0.5f, () =>
+                player.ChatMessage("Quick Revive activating... Stand up in 2 seconds!");
+                
+                // Use a 2 second timer for self-revive
+                timer.Once(2f, () =>
                 {
                     if (player != null && player.IsConnected && player.IsWounded())
                     {
                         TryInstantRevive(player);
+                        player.ChatMessage("Quick Revive: You stood back up!");
                         // QuickRevive is consumed after use
                         RevokePerk(player, "QuickRevive");
-                    }
-                });
-            }
-        }
-
-        // Hook when player starts helping another wounded player - use CanAssist hook
-        private object CanAssist(BasePlayer target, BasePlayer helper)
-        {
-            if (helper == null || target == null)
-                return null;
-
-            var d = GetPerkData(helper.userID);
-            if (d.Active.Contains("QuickRevive") && target.IsWounded())
-            {
-                // Instantly complete the revive
-                timer.Once(0.2f, () =>
-                {
-                    if (target != null && target.IsConnected && target.IsWounded())
-                    {
-                        target.StopWounded();
-                        target.health = cfg.QuickReviveRespawnHealth;
-                        if (target.metabolism != null)
-                            target.metabolism.bleeding.value = 0f;
-                        target.SendNetworkUpdate();
-                        helper.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
-                        target.ChatMessage($"You were instantly revived by {helper.displayName}'s Quick Revive!");
-                        DebugMsg($"Quick revived teammate {target.displayName} by {helper.displayName}");
-                    }
-                });
-            }
-
-            return null; // Allow the assist to proceed
-        }
-
-        // Hook when player starts helping another wounded player
-        private object OnPlayerRevive(BasePlayer reviver, BasePlayer target)
-        {
-            if (reviver == null || target == null)
-                return null;
-
-            var d = GetPerkData(reviver.userID);
-            if (d.Active.Contains("QuickRevive") && target.IsWounded())
-            {
-                // Instantly complete the revive
-                timer.Once(0.1f, () =>
-                {
-                    if (target != null && target.IsConnected && target.IsWounded())
-                    {
-                        target.StopWounded();
-                        target.health = cfg.QuickReviveRespawnHealth;
-                        if (target.metabolism != null)
-                            target.metabolism.bleeding.value = 0f;
-                        target.SendNetworkUpdate();
-                        reviver.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
-                        target.ChatMessage($"You were instantly revived by {reviver.displayName}'s Quick Revive!");
-                        DebugMsg($"Quick revived teammate {target.displayName} by {reviver.displayName}");
-                    }
-                });
-                return true; // Allow the revive action to start (but we complete it instantly)
-            }
-
-            return null;
-        }
-
-        // Additional hook for player assist action
-        private void OnPlayerAssist(BasePlayer target, BasePlayer player)
-        {
-            if (player == null || target == null)
-                return;
-
-            var d = GetPerkData(player.userID);
-            if (d.Active.Contains("QuickRevive") && target.IsWounded())
-            {
-                // Instantly complete the revive
-                timer.Once(0.1f, () =>
-                {
-                    if (target != null && target.IsConnected && target.IsWounded())
-                    {
-                        target.StopWounded();
-                        target.health = cfg.QuickReviveRespawnHealth;
-                        if (target.metabolism != null)
-                            target.metabolism.bleeding.value = 0f;
-                        target.SendNetworkUpdate();
-                        player.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
-                        target.ChatMessage($"You were instantly revived by {player.displayName}'s Quick Revive!");
-                        DebugMsg($"Quick revived teammate {target.displayName} by {player.displayName}");
                     }
                 });
             }
