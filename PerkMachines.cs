@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.8.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.7.0")]
     [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
     public class PerkMachines : RustPlugin
     {
@@ -113,8 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
-            timer.Every(1f, UpdatePerkUI); // Update perk icons and countdown timers
-            Puts("PerkMachines v2.8.0 loaded");
+            Puts("PerkMachines v2.7.0 loaded");
         }
 
         private void Unload()
@@ -136,18 +135,6 @@ namespace Oxide.Plugins
                 if (d.Active.Contains("Juggernog") && d.ExtraHealthGiven > 0)
                 {
                     RefreshHealthUI(player);
-                }
-            }
-        }
-
-        private void UpdatePerkUI()
-        {
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                var d = GetPerkData(player.userID);
-                if (d.Active.Count > 0)
-                {
-                    RefreshUI(player);
                 }
             }
         }
@@ -889,13 +876,13 @@ namespace Oxide.Plugins
             var mainPanel = new CuiPanel
             {
                 Image = { Color = "0 0 0 0" },
-                RectTransform = { AnchorMin = "0.01 0.60", AnchorMax = "0.15 0.98" },
+                RectTransform = { AnchorMin = "0.01 0.80", AnchorMax = "0.30 0.98" },
                 CursorEnabled = false
             };
 
             perkContainer.Add(mainPanel, "Hud", "perk_ui_container");
 
-            float y = 0.65f;
+            float y = 0.75f;
             foreach (var perk in d.Active)
             {
                 // Get the cached image using the perk name as identifier
@@ -911,39 +898,37 @@ namespace Oxide.Plugins
                         new CuiRectTransformComponent
                         {
                             AnchorMin = $"0 {y}",
-                            AnchorMax = $"0.07 {y + 0.4f}"
+                            AnchorMax = $"0.22 {y + 0.22f}"
                         }
                     }
                 };
                 perkContainer.Add(iconElement);
 
-                // Only show countdown if perk has an expiration time
                 double rem = d.ExpireAt.ContainsKey(perk)
                     ? d.ExpireAt[perk] - Time.realtimeSinceStartup
                     : -1;
 
-                // Show countdown below icon if there's a timer
-                if (rem > 0)
-                {
-                    var timerLabel = new CuiLabel
-                    {
-                        RectTransform =
-                        {
-                            AnchorMin = $"0 {y - 0.08f}",
-                            AnchorMax = $"0.07 {y}"
-                        },
-                        Text =
-                        {
-                            Text = $"{Math.Round(rem)}s",
-                            FontSize = 10,
-                            Color = "1 1 1 0.8",
-                            Align = TextAnchor.MiddleCenter
-                        }
-                    };
-                    perkContainer.Add(timerLabel, "perk_ui_container");
-                }
+                string text = rem > 0 ? $"{perk}: {Math.Round(rem)}s" : perk;
 
-                y -= 0.48f;
+                var label = new CuiLabel
+                {
+                    RectTransform =
+                    {
+                        AnchorMin = $"0.24 {y}",
+                        AnchorMax = $"1 {y + 0.22f}"
+                    },
+                    Text =
+                    {
+                        Text = text,
+                        FontSize = 14,
+                        Color = "1 1 1 1",
+                        Align = TextAnchor.MiddleLeft
+                    }
+                };
+
+                perkContainer.Add(label, "perk_ui_container");
+
+                y -= 0.25f;
             }
 
             CuiHelper.AddUi(player, perkContainer);
