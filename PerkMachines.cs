@@ -49,6 +49,7 @@ namespace Oxide.Plugins
             // Perk effects
             public float JuggernogBonus = 50f;
             public float JuggernogMaxCap = 200f;
+            public float BasePlayerHealth = 100f; // Base player health before Juggernog
             public float DoubleTapMultiplier = 2f;
             public float QuickReviveRespawnHealth = 100f;
 
@@ -110,7 +111,7 @@ namespace Oxide.Plugins
         {
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
-            timer.Every(0.5f, UpdateHealthUI); // Update health bar frequently
+            timer.Every(1f, UpdateHealthUI); // Update health bar periodically
             Puts("PerkMachines v2.1.0 loaded");
         }
 
@@ -161,7 +162,7 @@ namespace Oxide.Plugins
 
             // Calculate fill based on extra health remaining
             float maxExtra = cfg.JuggernogBonus;
-            float currentExtra = Math.Max(0f, player.health - 100f);
+            float currentExtra = Math.Max(0f, player.health - cfg.BasePlayerHealth);
             if (currentExtra > d.ExtraHealthGiven) currentExtra = d.ExtraHealthGiven;
             float fillPercent = Mathf.Clamp01(currentExtra / maxExtra);
 
@@ -441,7 +442,7 @@ namespace Oxide.Plugins
                 // Use a short timer to let the wound state fully apply first
                 timer.Once(0.5f, () =>
                 {
-                    if (player != null && player.IsWounded())
+                    if (player != null && player.IsConnected && player.IsWounded())
                     {
                         TryInstantRevive(player);
                         // QuickRevive is consumed after use
@@ -493,7 +494,7 @@ namespace Oxide.Plugins
             // Speed up reload by immediately adding ammo
             timer.Once(0.1f, () =>
             {
-                if (player == null || weapon == null || weapon.IsDestroyed)
+                if (player == null || !player.IsConnected || weapon == null || weapon.IsDestroyed)
                     return;
 
                 try
