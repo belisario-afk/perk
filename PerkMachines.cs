@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.5.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.6.0")]
     [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
     public class PerkMachines : RustPlugin
     {
@@ -113,7 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
-            Puts("PerkMachines v2.5.0 loaded");
+            Puts("PerkMachines v2.6.0 loaded");
         }
 
         private void Unload()
@@ -152,11 +152,11 @@ namespace Oxide.Plugins
 
             var container = new CuiElementContainer();
 
-            // Background panel for extended health bar
+            // Background panel for extended health bar - positioned bottom right, above normal health UI
             var healthBgPanel = new CuiPanel
             {
                 Image = { Color = "0.1 0.1 0.1 0.8" },
-                RectTransform = { AnchorMin = "0.318 0.027", AnchorMax = "0.42 0.055" },
+                RectTransform = { AnchorMin = "0.67 0.027", AnchorMax = "0.83 0.055" },
                 CursorEnabled = false
             };
             container.Add(healthBgPanel, "Hud", "perk_health_ui");
@@ -369,7 +369,7 @@ namespace Oxide.Plugins
                         d.ExtraHealthGiven += give;
                         d.CurrentExtraHealth = d.ExtraHealthGiven; // Start with full extra health
                         player.SendNetworkUpdate(); // Sync to client
-                        player.ChatMessage($"Juggernog active (+{give} HP shield)");
+                        player.ChatMessage($"Juggernog activated (+{give} HP shield)");
                     }
                     else
                     {
@@ -381,14 +381,14 @@ namespace Oxide.Plugins
 
                 case "SpeedCola":
                     if (apply)
-                        player.ChatMessage("Speed Cola active: instant reload");
+                        player.ChatMessage("Speed Cola activated");
                     else
                         player.ChatMessage("Speed Cola expired");
                     break;
 
                 case "DoubleTap":
                     if (apply)
-                        player.ChatMessage("Double Tap active: increased damage");
+                        player.ChatMessage("Double Tap activated");
                     else
                         player.ChatMessage("Double Tap expired");
                     break;
@@ -396,7 +396,7 @@ namespace Oxide.Plugins
                 case "QuickRevive":
                     if (apply)
                     {
-                        player.ChatMessage("Quick Revive active: Auto-revive in 2 sec if downed + Instant revive teammates!");
+                        player.ChatMessage("Quick Revive activated (auto-revive in 2 sec if downed)");
                     }
                     else
                     {
@@ -457,31 +457,6 @@ namespace Oxide.Plugins
             }
         }
 
-        // TEAMMATE REVIVE: When a player with QuickRevive helps revive a wounded teammate,
-        // the revive happens instantly. Uses CanAssist hook which fires when pressing E on wounded player.
-        private object CanAssist(BasePlayer target, BasePlayer helper)
-        {
-            if (helper == null || target == null)
-                return null;
-
-            var d = GetPerkData(helper.userID);
-            if (d.Active.Contains("QuickRevive") && target.IsWounded())
-            {
-                // Instantly complete the revive
-                target.StopWounded();
-                target.health = cfg.QuickReviveRespawnHealth;
-                if (target.metabolism != null)
-                    target.metabolism.bleeding.value = 0f;
-                target.SendNetworkUpdate();
-                helper.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
-                target.ChatMessage($"You were instantly revived by {helper.displayName}'s Quick Revive!");
-                DebugMsg($"Quick revived teammate {target.displayName} by {helper.displayName}");
-                return false; // Block the normal assist since we already revived them
-            }
-
-            return null; // Allow normal assist
-        }
-
         // Hook for healing - regenerate extra health pool ONLY after normal health is at max
         private void OnHealingItemUse(HeldEntity item, BasePlayer player)
         {
@@ -502,7 +477,6 @@ namespace Oxide.Plugins
                             float healAmount = 15f; // Heal 15 extra HP per healing item
                             d.CurrentExtraHealth = Mathf.Min(d.CurrentExtraHealth + healAmount, d.ExtraHealthGiven);
                             RefreshHealthUI(player);
-                            player.ChatMessage($"Extra health restored: +{healAmount} ({Mathf.RoundToInt(d.CurrentExtraHealth)}/{Mathf.RoundToInt(d.ExtraHealthGiven)})");
                             DebugMsg($"Healed extra HP for {player.displayName}: {d.CurrentExtraHealth}/{d.ExtraHealthGiven}");
                         }
                     }
@@ -687,7 +661,6 @@ namespace Oxide.Plugins
                         targetWeapon.SendNetworkUpdateImmediate();
                         player.SendNetworkUpdateImmediate();
                         
-                        player.ChatMessage($"Speed Cola: Instant reload! (+{toLoad} ammo)");
                         DebugMsg($"SpeedCola: Instant reload {toLoad} ammo for {player.displayName}");
                     }
                 }
@@ -895,18 +868,19 @@ namespace Oxide.Plugins
             var mainPanel = new CuiPanel
             {
                 Image = { Color = "0 0 0 0" },
-                RectTransform = { AnchorMin = "0.015 0.85", AnchorMax = "0.25 0.97" },
+                RectTransform = { AnchorMin = "0.01 0.80", AnchorMax = "0.30 0.98" },
                 CursorEnabled = false
             };
 
             perkContainer.Add(mainPanel, "Hud", "perk_ui_container");
 
-            float y = 0.8f;
+            float y = 0.75f;
             foreach (var perk in d.Active)
             {
                 cfg.PerkIconUrls.TryGetValue(perk, out var url);
                 string rawImage = GetImageCached(url) ?? string.Empty;
 
+                // Larger, more square icon (0.25 width x 0.22 height for near-square aspect)
                 var iconElement = new CuiElement
                 {
                     Parent = "perk_ui_container",
@@ -916,7 +890,7 @@ namespace Oxide.Plugins
                         new CuiRectTransformComponent
                         {
                             AnchorMin = $"0 {y}",
-                            AnchorMax = $"0.15 {y + 0.15f}"
+                            AnchorMax = $"0.22 {y + 0.22f}"
                         }
                     }
                 };
@@ -932,8 +906,8 @@ namespace Oxide.Plugins
                 {
                     RectTransform =
                     {
-                        AnchorMin = $"0.16 {y}",
-                        AnchorMax = $"1 {y + 0.15f}"
+                        AnchorMin = $"0.24 {y}",
+                        AnchorMax = $"1 {y + 0.22f}"
                     },
                     Text =
                     {
@@ -946,7 +920,7 @@ namespace Oxide.Plugins
 
                 perkContainer.Add(label, "perk_ui_container");
 
-                y -= 0.18f;
+                y -= 0.25f;
             }
 
             CuiHelper.AddUi(player, perkContainer);
