@@ -113,6 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
+            timer.Every(1f, UpdatePerkUI); // Update perk countdown timers every second
             Puts("PerkMachines v2.7.0 loaded");
         }
 
@@ -135,6 +136,18 @@ namespace Oxide.Plugins
                 if (d.Active.Contains("Juggernog") && d.ExtraHealthGiven > 0)
                 {
                     RefreshHealthUI(player);
+                }
+            }
+        }
+
+        private void UpdatePerkUI()
+        {
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                var d = GetPerkData(player.userID);
+                if (d.Active.Count > 0)
+                {
+                    RefreshUI(player);
                 }
             }
         }
