@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.4.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.5.0")]
     [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
     public class PerkMachines : RustPlugin
     {
@@ -113,7 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
-            Puts("PerkMachines v2.4.0 loaded");
+            Puts("PerkMachines v2.5.0 loaded");
         }
 
         private void Unload()
@@ -396,7 +396,7 @@ namespace Oxide.Plugins
                 case "QuickRevive":
                     if (apply)
                     {
-                        player.ChatMessage("Quick Revive active: You will auto-revive in 2 seconds if downed!");
+                        player.ChatMessage("Quick Revive active: Auto-revive in 2 sec if downed + Instant revive teammates!");
                     }
                     else
                     {
@@ -431,7 +431,7 @@ namespace Oxide.Plugins
         }
 
         // Hook for when player becomes wounded - auto-revive if they have QuickRevive
-        // QuickRevive now works as SELF-REVIVE: when the player with this perk goes down,
+        // QuickRevive SELF-REVIVE: when the player with this perk goes down,
         // they automatically stand back up after a 2 second delay
         private void OnPlayerWound(BasePlayer player)
         {
@@ -455,6 +455,31 @@ namespace Oxide.Plugins
                     }
                 });
             }
+        }
+
+        // TEAMMATE REVIVE: When a player with QuickRevive helps revive a wounded teammate,
+        // the revive happens instantly. Uses CanAssist hook which fires when pressing E on wounded player.
+        private object CanAssist(BasePlayer target, BasePlayer helper)
+        {
+            if (helper == null || target == null)
+                return null;
+
+            var d = GetPerkData(helper.userID);
+            if (d.Active.Contains("QuickRevive") && target.IsWounded())
+            {
+                // Instantly complete the revive
+                target.StopWounded();
+                target.health = cfg.QuickReviveRespawnHealth;
+                if (target.metabolism != null)
+                    target.metabolism.bleeding.value = 0f;
+                target.SendNetworkUpdate();
+                helper.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
+                target.ChatMessage($"You were instantly revived by {helper.displayName}'s Quick Revive!");
+                DebugMsg($"Quick revived teammate {target.displayName} by {helper.displayName}");
+                return false; // Block the normal assist since we already revived them
+            }
+
+            return null; // Allow normal assist
         }
 
         // Hook for healing - regenerate extra health pool ONLY after normal health is at max
