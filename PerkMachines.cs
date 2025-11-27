@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.9.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.9.1")]
     [Description("Perk machines: walk up, press E to buy perk bottles, drink them to activate perks.")]
     public class PerkMachines : RustPlugin
     {
@@ -21,8 +21,8 @@ namespace Oxide.Plugins
 
         private class PerkConfig
         {
-            // Item to give player (uses rock as base item for perk bottles)
-            public string PerkItemShortname = "rock";
+            // Item to give player (uses tea as base item with rock skin for icon)
+            public string PerkItemShortname = "maxhealthtea.pure";
 
             // Machine skins per perk (vending machine appearance)
             public Dictionary<string, ulong> MachineSkins = new Dictionary<string, ulong>
@@ -33,7 +33,7 @@ namespace Oxide.Plugins
                 {"DoubleTap", 3613106495}
             };
 
-            // Perk bottle item skins (rock with custom icons)
+            // Perk bottle item skins (tea with rock skin IDs for custom icons)
             public Dictionary<string, ulong> PerkItemSkins = new Dictionary<string, ulong>
             {
                 {"Juggernog", 3613226032},
