@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.1.0")]
+    [Info("PerkMachines", "KillaDome (fixed by Copilot)", "2.2.0")]
     [Description("Perk machines: walk up, press E to buy perks via external currency plugin, plus perk effects & HUD.")]
     public class PerkMachines : RustPlugin
     {
@@ -72,7 +72,8 @@ namespace Oxide.Plugins
         {
             public HashSet<string> Active = new HashSet<string>();
             public Dictionary<string, double> ExpireAt = new Dictionary<string, double>();
-            public float ExtraHealthGiven = 0f;
+            public float ExtraHealthGiven = 0f;  // Max extra health pool from Juggernog
+            public float CurrentExtraHealth = 0f; // Current extra health remaining (takes damage first)
         }
 
         private readonly Dictionary<ulong, PlayerPerkData> playerPerks = new Dictionary<ulong, PlayerPerkData>();
@@ -112,7 +113,7 @@ namespace Oxide.Plugins
             timer.Once(2f, LoadImages);
             timer.Every(1f, CheckExpired);
             timer.Every(1f, UpdateHealthUI); // Update health bar periodically
-            Puts("PerkMachines v2.1.0 loaded");
+            Puts("PerkMachines v2.2.0 loaded");
         }
 
         private void Unload()
@@ -160,17 +161,9 @@ namespace Oxide.Plugins
             };
             container.Add(healthBgPanel, "Hud", "perk_health_ui");
 
-            // Calculate fill based on extra health remaining
-            // Show the actual bonus health given, not calculated from current health
-            float maxExtra = cfg.JuggernogBonus;
-            float currentExtra = d.ExtraHealthGiven;
-            
-            // If player has taken damage, calculate remaining bonus health
-            if (player.health < cfg.BasePlayerHealth + d.ExtraHealthGiven)
-            {
-                currentExtra = Math.Max(0f, player.health - cfg.BasePlayerHealth);
-            }
-            
+            // Use the current extra health pool directly
+            float maxExtra = d.ExtraHealthGiven;
+            float currentExtra = d.CurrentExtraHealth;
             float fillPercent = Mathf.Clamp01(currentExtra / maxExtra);
 
             // Extended health bar fill (red color to match Rust's health bar)
@@ -368,20 +361,20 @@ namespace Oxide.Plugins
                     if (apply)
                     {
                         float give = cfg.JuggernogBonus;
-                        float currentMax = player.health + d.ExtraHealthGiven;
+                        float currentMax = cfg.BasePlayerHealth + d.ExtraHealthGiven;
 
                         if (currentMax + give > cfg.JuggernogMaxCap)
                             give = Math.Max(0f, cfg.JuggernogMaxCap - currentMax);
 
                         d.ExtraHealthGiven += give;
-                        player.health = Mathf.Min(player.health + give, cfg.JuggernogMaxCap);
-                        player.SendNetworkUpdate(); // Sync health to client
-                        player.ChatMessage($"Juggernog active (+{give} HP)");
+                        d.CurrentExtraHealth = d.ExtraHealthGiven; // Start with full extra health
+                        player.SendNetworkUpdate(); // Sync to client
+                        player.ChatMessage($"Juggernog active (+{give} HP shield)");
                     }
                     else
                     {
-                        player.health = Mathf.Max(1f, player.health - d.ExtraHealthGiven);
                         d.ExtraHealthGiven = 0f;
+                        d.CurrentExtraHealth = 0f;
                         player.ChatMessage("Juggernog expired");
                     }
                     break;
@@ -460,6 +453,117 @@ namespace Oxide.Plugins
             }
         }
 
+        // Hook for when player assists reviving another player - speed up the revive
+        private void OnPlayerAssist(BasePlayer target, BasePlayer assistant)
+        {
+            if (target == null || assistant == null)
+                return;
+
+            var d = GetPerkData(assistant.userID);
+            if (d.Active.Contains("QuickRevive") && target.IsWounded())
+            {
+                // Instantly revive the teammate
+                timer.Once(0.1f, () =>
+                {
+                    if (target != null && target.IsConnected && target.IsWounded())
+                    {
+                        target.StopWounded();
+                        target.health = cfg.QuickReviveRespawnHealth;
+                        if (target.metabolism != null)
+                            target.metabolism.bleeding.value = 0f;
+                        target.SendNetworkUpdate();
+                        assistant.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
+                        target.ChatMessage($"You were instantly revived by {assistant.displayName}'s Quick Revive!");
+                        DebugMsg($"Quick revived teammate {target.displayName} by {assistant.displayName}");
+                    }
+                });
+            }
+        }
+
+        // Hook when player starts helping another wounded player
+        private object OnPlayerRevive(BasePlayer reviver, BasePlayer target)
+        {
+            if (reviver == null || target == null)
+                return null;
+
+            var d = GetPerkData(reviver.userID);
+            if (d.Active.Contains("QuickRevive") && target.IsWounded())
+            {
+                // Instantly complete the revive
+                timer.Once(0.1f, () =>
+                {
+                    if (target != null && target.IsConnected && target.IsWounded())
+                    {
+                        target.StopWounded();
+                        target.health = cfg.QuickReviveRespawnHealth;
+                        if (target.metabolism != null)
+                            target.metabolism.bleeding.value = 0f;
+                        target.SendNetworkUpdate();
+                        reviver.ChatMessage($"Quick Revive: Instantly revived {target.displayName}!");
+                        target.ChatMessage($"You were instantly revived by {reviver.displayName}'s Quick Revive!");
+                        DebugMsg($"Quick revived teammate {target.displayName} by {reviver.displayName}");
+                    }
+                });
+                return true; // Allow the revive action to start (but we complete it instantly)
+            }
+
+            return null;
+        }
+
+        // Hook for healing - regenerate extra health pool
+        private void OnHealingItemUse(HeldEntity item, BasePlayer player)
+        {
+            if (player == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (d.Active.Contains("Juggernog") && d.CurrentExtraHealth < d.ExtraHealthGiven)
+            {
+                // Heal extra health pool too (after a delay to let normal healing happen)
+                timer.Once(0.5f, () =>
+                {
+                    if (player != null && player.IsConnected && d.Active.Contains("Juggernog"))
+                    {
+                        // Heal extra health by a portion
+                        float healAmount = 15f; // Heal 15 extra HP per healing item
+                        d.CurrentExtraHealth = Mathf.Min(d.CurrentExtraHealth + healAmount, d.ExtraHealthGiven);
+                        RefreshHealthUI(player);
+                        DebugMsg($"Healed extra HP for {player.displayName}: {d.CurrentExtraHealth}/{d.ExtraHealthGiven}");
+                    }
+                });
+            }
+        }
+
+        // Also heal when player's health naturally regenerates or is healed by any source
+        private void OnPlayerHealthChange(BasePlayer player, float oldValue, float newValue)
+        {
+            if (player == null)
+                return;
+
+            var d = GetPerkData(player.userID);
+            if (!d.Active.Contains("Juggernog"))
+                return;
+
+            // If health increased (healing occurred), also heal extra health pool
+            if (newValue > oldValue && d.CurrentExtraHealth < d.ExtraHealthGiven)
+            {
+                float healAmount = newValue - oldValue;
+                // If at max base health, overflow healing goes to extra health
+                if (newValue >= cfg.BasePlayerHealth)
+                {
+                    float overflow = Math.Max(0f, newValue - cfg.BasePlayerHealth);
+                    if (overflow > 0)
+                    {
+                        // Cap player at base health, put overflow into extra health
+                        player.health = cfg.BasePlayerHealth;
+                        d.CurrentExtraHealth = Mathf.Min(d.CurrentExtraHealth + overflow, d.ExtraHealthGiven);
+                        player.SendNetworkUpdate();
+                        RefreshHealthUI(player);
+                    }
+                }
+            }
+        }
+
         #endregion
 
         #region Combat hooks
@@ -474,6 +578,40 @@ namespace Oxide.Plugins
                 return true; // Block all damage to perk machines
             }
 
+            // Handle Juggernog extra health - absorb damage before real health
+            var targetPlayer = entity as BasePlayer;
+            if (targetPlayer != null && info != null)
+            {
+                var targetData = GetPerkData(targetPlayer.userID);
+                if (targetData.Active.Contains("Juggernog") && targetData.CurrentExtraHealth > 0)
+                {
+                    float totalDamage = info.damageTypes.Total();
+                    
+                    if (totalDamage > 0)
+                    {
+                        // Extra health absorbs damage first
+                        if (targetData.CurrentExtraHealth >= totalDamage)
+                        {
+                            // Extra health absorbs all damage
+                            targetData.CurrentExtraHealth -= totalDamage;
+                            DebugMsg($"Juggernog absorbed {totalDamage} damage. Remaining extra HP: {targetData.CurrentExtraHealth}");
+                            RefreshHealthUI(targetPlayer);
+                            return true; // Block damage to real health
+                        }
+                        else
+                        {
+                            // Extra health absorbs partial damage, rest goes to real health
+                            float remaining = totalDamage - targetData.CurrentExtraHealth;
+                            DebugMsg($"Juggernog absorbed {targetData.CurrentExtraHealth} damage, {remaining} passes through");
+                            targetData.CurrentExtraHealth = 0f;
+                            info.damageTypes.ScaleAll(remaining / totalDamage);
+                            RefreshHealthUI(targetPlayer);
+                        }
+                    }
+                }
+            }
+
+            // Handle DoubleTap damage multiplier for attacker
             if (info?.InitiatorPlayer == null)
                 return null;
 
@@ -489,7 +627,7 @@ namespace Oxide.Plugins
             return null;
         }
 
-        // SpeedCola: Faster reload by adding ammo directly and reducing reload time
+        // SpeedCola: Instant reload - directly fill magazine after short delay
         private void OnReloadWeapon(BasePlayer player, BaseProjectile weapon)
         {
             if (player == null || weapon == null)
@@ -499,32 +637,51 @@ namespace Oxide.Plugins
             if (!d.Active.Contains("SpeedCola"))
                 return;
 
-            // Speed up reload by immediately adding ammo
-            timer.Once(0.1f, () =>
+            // Store weapon reference for the timer
+            var weaponId = weapon.net?.ID ?? 0;
+            
+            // Short delay then instant reload
+            timer.Once(0.3f, () =>
             {
-                if (player == null || !player.IsConnected || weapon == null || weapon.IsDestroyed)
+                if (player == null || !player.IsConnected)
                     return;
 
                 try
                 {
-                    var ammoType = weapon.primaryMagazine?.ammoType;
-                    if (ammoType == null)
+                    // Find the held weapon
+                    var heldItem = player.GetActiveItem();
+                    var heldWeapon = heldItem?.GetHeldEntity() as BaseProjectile;
+                    
+                    if (heldWeapon == null || heldWeapon.IsDestroyed)
                         return;
 
-                    // Find ammo in player inventory
-                    int needed = weapon.primaryMagazine.capacity - weapon.primaryMagazine.contents;
+                    var magazine = heldWeapon.primaryMagazine;
+                    if (magazine == null || magazine.ammoType == null)
+                        return;
+
+                    // Calculate ammo needed
+                    int needed = magazine.capacity - magazine.contents;
                     if (needed <= 0)
                         return;
 
-                    int found = player.inventory.GetAmount(ammoType.itemid);
+                    // Find ammo in player inventory
+                    int found = player.inventory.GetAmount(magazine.ammoType.itemid);
                     int toLoad = Math.Min(needed, found);
 
                     if (toLoad > 0)
                     {
-                        player.inventory.Take(null, ammoType.itemid, toLoad);
-                        weapon.primaryMagazine.contents += toLoad;
-                        weapon.SendNetworkUpdateImmediate();
-                        DebugMsg($"SpeedCola: Fast-loaded {toLoad} ammo for {player.displayName}");
+                        // Take ammo from inventory
+                        player.inventory.Take(null, magazine.ammoType.itemid, toLoad);
+                        
+                        // Fill magazine instantly
+                        magazine.contents += toLoad;
+                        
+                        // Cancel any ongoing reload and update
+                        heldWeapon.SendNetworkUpdateImmediate();
+                        player.SendNetworkUpdateImmediate();
+                        
+                        player.ChatMessage($"Speed Cola: Instant reload! (+{toLoad} ammo)");
+                        DebugMsg($"SpeedCola: Instant reload {toLoad} ammo for {player.displayName}");
                     }
                 }
                 catch (Exception ex)
